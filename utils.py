@@ -4,7 +4,7 @@
 
 import logging, asyncio, os, re, random, pytz, aiohttp, requests, string, json, http.client
 from info import *
-from imdb import Cinemagoer 
+from imdb_helper import get_imdb_client
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 from pyrogram import enums
 from pyrogram.errors import *
@@ -22,7 +22,7 @@ logger.setLevel(logging.INFO)
 join_db = JoinReqs
 BTN_URL_REGEX = re.compile(r"(\[([^\[]+?)\]\((buttonurl|buttonalert):(?:/{0,2})(.+?)(:same)?\))")
 
-imdb = Cinemagoer() 
+imdb = get_imdb_client()
 TOKENS = {}
 VERIFIED = {}
 BANNED = {}
@@ -94,6 +94,20 @@ async def is_subscribed(bot, query):
         return False
 
 async def get_poster(query, bulk=False, id=False, file=None):
+    """IMDb caption helper.
+
+    Any IMDb problem (no database, network hiccup, WAF, ...) is swallowed
+    here on purpose: the bot must keep filtering files even when the
+    optional IMDb data is not available.
+    """
+    try:
+        return await _get_poster(query, bulk=bulk, id=id, file=file)
+    except Exception as e:
+        logger.warning(f"IMDb lookup failed for '{query}': {e}")
+        return None
+
+
+async def _get_poster(query, bulk=False, id=False, file=None):
     if not id:
         query = (query.strip()).lower()
         title = query
@@ -127,6 +141,14 @@ async def get_poster(query, bulk=False, id=False, file=None):
     movie = imdb.get_movie(movieid)
     if not movie:
         return None
+    # IMDb ids are always "tt" + 7 digits ("tt0133093").
+    raw_id = str(movie.get("imdbID") or movieid or "").strip()
+    if raw_id.startswith("tt"):
+        imdb_id = raw_id
+    elif raw_id.isdigit():
+        imdb_id = "tt%s" % raw_id.zfill(7)
+    else:
+        imdb_id = "tt%s" % raw_id
     if movie.get("original air date"):
         date = movie["original air date"]
     elif movie.get("year"):
@@ -151,7 +173,7 @@ async def get_poster(query, bulk=False, id=False, file=None):
         "box_office": movie.get('box office'),
         'localized_title': movie.get('localized title'),
         'kind': movie.get("kind"),
-        "imdb_id": f"tt{movie.get('imdbID')}",
+        "imdb_id": imdb_id,
         "cast": list_to_str(movie.get("cast")),
         "runtime": list_to_str(movie.get("runtimes")),
         "countries": list_to_str(movie.get("countries")),
@@ -170,7 +192,7 @@ async def get_poster(query, bulk=False, id=False, file=None):
         'poster': movie.get('full-size cover url'),
         'plot': plot,
         'rating': str(movie.get("rating")),
-        'url':f'https://www.imdb.com/title/tt{movieid}'
+        'url': f'https://www.imdb.com/title/{imdb_id}'
     }
 
 async def broadcast_messages(user_id, message):
